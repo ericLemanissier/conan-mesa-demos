@@ -1,17 +1,18 @@
-from conans import ConanFile, CMake, tools
+from conans import ConanFile, tools, AutoToolsBuildEnvironment
+import shutil
 import os
 
 
 class LibnameConan(ConanFile):
-    name = "libname"
+    name = "mesa-demos"
+    version = "8.4.0"
     description = "Keep it short"
     topics = ("conan", "libname", "logging")
     url = "https://github.com/bincrafters/conan-libname"
-    homepage = "https://github.com/original_author/original_lib"
+    homepage = "https://cgit.freedesktop.org/mesa/demos"
     license = "MIT"  # Indicates license type of the packaged library; please use SPDX Identifiers https://spdx.org/licenses/
-    # Remove following lines if the target lib does not use CMake
-    exports_sources = ["CMakeLists.txt"]
-    generators = "cmake"
+    _autotools = None
+    generators = "pkg_config"
 
     # Options may need to change depending on the packaged library
     settings = "os", "arch", "compiler", "build_type"
@@ -21,9 +22,11 @@ class LibnameConan(ConanFile):
     _source_subfolder = "source_subfolder"
     _build_subfolder = "build_subfolder"
 
-    requires = (
-        "zlib/1.2.11"
-    )
+    requires = [
+        "mesa/19.3.1@bincrafters/stable",
+        "glew/2.1.0@bincrafters/stable",
+        "mesa-glu/9.0.1@bincrafters/stable"
+    ]
 
     def config_options(self):
         if self.settings.os == 'Windows':
@@ -34,29 +37,29 @@ class LibnameConan(ConanFile):
         extracted_dir = self.name + "-" + self.version
         os.rename(extracted_dir, self._source_subfolder)
 
-    def _configure_cmake(self):
-        cmake = CMake(self)
-        cmake.definitions["BUILD_TESTS"] = False  # example
-        cmake.configure(build_folder=self._build_subfolder)
-        return cmake
+    def _configure_autotools(self):
+        if not self._autotools:
+            self._autotools = AutoToolsBuildEnvironment(self, include_rpath_flags=True)
+            self._autotools.configure(pkg_config_paths=self.build_folder)
+        return self._autotools
 
     def build(self):
-        cmake = self._configure_cmake()
-        cmake.build()
+        for package in self.deps_cpp_info.deps:
+            lib_path = self.deps_cpp_info[package].rootpath
+            for dirpath, _, filenames in os.walk(lib_path):
+                for filename in filenames:
+                    if filename.endswith('.pc'):
+                        shutil.copyfile(os.path.join(dirpath, filename), filename)
+                        tools.replace_prefix_in_pc_file(filename, lib_path)
+        with tools.chdir(self._source_subfolder):
+            autotools = self._configure_autotools()
+            autotools.make()
 
     def package(self):
         self.copy(pattern="LICENSE", dst="licenses", src=self._source_subfolder)
-        cmake = self._configure_cmake()
-        cmake.install()
-        # If the CMakeLists.txt has a proper install method, the steps below may be redundant
-        # If so, you can just remove the lines below
-        include_folder = os.path.join(self._source_subfolder, "include")
-        self.copy(pattern="*", dst="include", src=include_folder)
-        self.copy(pattern="*.dll", dst="bin", keep_path=False)
-        self.copy(pattern="*.lib", dst="lib", keep_path=False)
-        self.copy(pattern="*.a", dst="lib", keep_path=False)
-        self.copy(pattern="*.so*", dst="lib", keep_path=False)
-        self.copy(pattern="*.dylib", dst="lib", keep_path=False)
+        with tools.chdir(self._source_subfolder):
+            autotools = self._configure_autotools()
+            autotools.install(args=["-j1"])
 
     def package_info(self):
         self.cpp_info.libs = tools.collect_libs(self)
